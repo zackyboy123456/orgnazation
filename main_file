@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""
+organize_files.py
+
+General-purpose folder organizer:
+- Scans a target directory (non-recursive by default)
+- Moves files into category subfolders based on extension
+- Case-insensitive extension matching
+- Safe behavior: dry-run, collision handling, logging
+- Configurable via CLI args
+
+Example:
+    python organize_files.py --path "/home/me/Downloads" --dry-run
+    python organize_files.py --path "C:\\Users\\me\\Desktop" --move
+
+Notes:
+- This is a non-recursive organizer by default. Use --recursive to walk subfolders.
+- By default it moves files. Use --copy to copy instead.
+- Hidden files and directories are skipped.
+"""
+
+from pathlib import Path
+import argparse
+import shutil
+import sys
+import logging
+
+# ---------------------------
+# Category -> extensions map
+# All extensions listed in lowercase; add more as needed.
+# ---------------------------
+EXTENSIONS = {
+    "Audio": {
+        # Common audio formats and some mobile/legacy containers
+        ".3ga", ".aac", ".ac3", ".aif", ".aiff", ".alac", ".amr", ".ape", ".au",
+        ".dss", ".flac", ".m4a", ".m4b", ".m4p", ".mp3", ".mpga", ".ogg", ".oga",
+        ".opus", ".qcp", ".tta", ".voc", ".wav", ".wma", ".wv"
+    },
+    "Video": {
+        # Common video containers / codecs
+        ".webm", ".mts", ".m2ts", ".ts", ".mov", ".mp4", ".m4v", ".mxf", ".avi",
+        ".mkv", ".flv", ".3gp", ".wmv"
+    },
+    "Images": {
+        # Raster and vector images
+        ".jpg", ".jpeg", ".jfif", ".pjpeg", ".pjp", ".png", ".gif", ".webp",
+        ".svg", ".apng", ".avif", ".bmp", ".tif", ".tiff", ".heic", ".ico"
+    },
+    "Documents": {
+        # Office documents, text, and PDFs
+        ".pdf", ".doc", ".docx", ".dotx", ".odt", ".rtf", ".txt", ".md", ".tex"
+    },
+    "Spreadsheets": {
+        ".xls", ".xlsx", ".xlsm", ".csv", ".ods"
+    },
+    "Presentations": {
+        ".ppt", ".pptx", ".key", ".odp"
+    },
+    "Ebooks": {
+        ".epub", ".mobi", ".azw", ".azw3", ".fb2"
+    },
+    "Archives": {
+        # Compressed archives and disk images
+        ".zip", ".7z", ".rar", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".iso", ".dmg"
+    },
+    "Code": {
+        # Source code, markup, config, scripts
+        ".py", ".pyw", ".ipynb", ".js", ".jsx", ".ts", ".tsx", ".java", ".class",
+        ".c", ".cpp", ".h", ".hpp", ".cs", ".go", ".rb", ".php", ".rs", ".swift",
+        ".kt", ".kts", ".sh", ".bash", ".ps1", ".html", ".htm", ".css", ".scss",
+        ".json", ".xml", ".yml", ".yaml", ".ini", ".cfg", ".gradle", ".makefile", ".mk"
+    },
+    "Fonts": {
+        ".ttf", ".otf", ".woff", ".woff2"
+    },
+    "Executables": {
+        # OS executables / installers / packages
+        ".exe", ".msi", ".apk", ".bat", ".cmd", ".deb", ".rpm", ".appimage"
+    },
+    "Vector": {
+        # Vector art, CAD and design files
+        ".svg", ".eps", ".ai", ".ps", ".cdr", ".dxf", ".dwg"
+    },
+    "Databases": {
+        ".sql", ".db", ".sqlite", ".sqlite3", ".mdb", ".accdb"
+    },
+    "Presentations_Notes": set(),  # empty placeholder (example of adding categories)
+    "Others": set()  # fallback category
+}
+
+# Provide a reverse-lookup mapping for fast searches
+EXT_TO_CATEGORY = {}
+for cat, exts in EXTENSIONS.items():
+    for e in exts:
+        EXT_TO_CATEGORY[e] = cat
+
+# ---------------------------
+# Utilities
+# ---------------------------
+def safe_move(src: Path, dst_dir: Path, copy=False, dry_run=False):
+    """
+    Move (or copy) src file into dst_dir, handling name collisions by appending (n).
+    Returns final destination path (or would-be path in dry-run).
+    """
+    dst_dir.mkdir(parents=True, exist_ok=True)
+
+    candidate = dst_dir / src.name
+    if candidate.exists():
+        stem = src.stem
+        suffix = src.suffix
+        i = 1
+        while True:
+            candidate = dst_dir / f"{stem} ({i}){suffix}"
+            if not candidate.exists():
+                break
+            i += 1
+
+    if dry_run:
+        logging.info("DRY-RUN: %s -> %s", src, candidate)
+        return candidate
+
+    if copy:
+        shutil.copy2(src, candidate)
+        logging.info("Copied: %s -> %s", src, candidate)
+    else:
+        shutil.move(str(src), str(candidate))
+        logging.info("Moved: %s -> %s", src, candidate)
+
+    return candidate
+
+def categorize(ext: str):
+    """Return category name for a file extension; fallback to 'Others'."""
+    return EXT_TO_CATEGORY.get(ext.lower(), "Others")
+
+# ---------------------------
+# Main logic
+# ---------------------------
+def organize_directory(target_dir: Path, recursive=False, copy=False, dry_run=False, verbose=False):
+    """
+    Organize files in target_dir.
+    - recursive: walk subdirectories (will also move files out of subfolders into category folders in target_dir)
+    - copy: copy instead of move
+    - dry_run: show actions without performing them
+    """
+    if not target_dir.exists() or not target_dir.is_dir():
+        raise ValueError(f"Target path does not exist or is not a directory: {target_dir}")
+
+    # Choose iterator
+    if recursive:
+        iterator = target_dir.rglob("*")
+    else:
+        iterator = target_dir.iterdir()
+
+    stats = {}
+    for p in iterator:
+        # Skip directories
+        if p.is_dir():
+            continue
+        # Skip hidden files (on Unix start with .) and same script file
+        if p.name.startswith("."):
+            if verbose:
+                logging.debug("Skipping hidden file: %s", p)
+            continue
+
+        ext = p.suffix.lower()
+        cat = categorize(ext)
+        dest_dir = target_dir / cat.lower()
+        # Update stats
+        stats[cat] = stats.get(cat, 0) + 1
+        safe_move(p, dest_dir, copy=copy, dry_run=dry_run)
+
+    # Summary
+    if dry_run:
+        logging.info("Dry-run summary (files that would be moved by category):")
+    else:
+        logging.info("Operation summary (files moved/copied by category):")
+    for cat, count in sorted(stats.items(), key=lambda x: x[0]):
+        logging.info("  %s: %d", cat, count)
+
+    if not stats:
+        logging.info("No files matched any category (directory may be empty).")
+
+# ---------------------------
+# CLI
+# ---------------------------
+def parse_args(argv):
+    p = argparse.ArgumentParser(description="Organize files in a folder by file type (extension).")
+    p.add_argument("--path", "-p", type=str, help="Path to the folder to organize. If omitted, will prompt.")
+    p.add_argument("--recursive", "-r", action="store_true", help="Process files in subfolders recursively.")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--copy", action="store_true", help="Copy files instead of moving.")
+    group.add_argument("--move", action="store_true", help="Move files (default).")
+    p.add_argument("--dry-run", action="store_true", help="Show what would be done without moving files.")
+    p.add_argument("--verbose", "-v", action="store_true", help="Show verbose debug logs.")
+    return p.parse_args(argv)
+
+def main(argv):
+    args = parse_args(argv)
+
+    # Setup logging
+    level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(levelname)s: %(message)s")
+
+    if args.path:
+        target = Path(args.path).expanduser().resolve()
+    else:
+        # interactive prompt if no path provided
+        try:
+            p_in = input("Enter the path to organize (or press Enter to exit): ").strip()
+        except KeyboardInterrupt:
+            print()
+            logging.info("Aborted by user.")
+            return
+        if not p_in:
+            logging.info("No path provided; exiting.")
+            return
+        target = Path(p_in).expanduser().resolve()
+
+    copy = args.copy
+    if not args.copy and not args.move:
+        # default behavior: move
+        copy = False
+
+    try:
+        organize_directory(target, recursive=args.recursive, copy=copy, dry_run=args.dry_run, verbose=args.verbose)
+    except Exception as e:
+        logging.error("Error: %s", e)
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
