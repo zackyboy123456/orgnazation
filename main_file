@@ -1,9 +1,6 @@
-#!/usr/bin/env python3
-"""
-organize_files.py
 
 General-purpose folder organizer:
-- Scans a target directory (non-recursive by default)
+- Scans a target directory 
 - Moves files into category subfolders based on extension
 - Case-insensitive extension matching
 - Safe behavior: dry-run, collision handling, logging
@@ -13,10 +10,6 @@ Example:
     python organize_files.py --path "/home/me/Downloads" --dry-run
     python organize_files.py --path "C:\\Users\\me\\Desktop" --move
 
-Notes:
-- This is a non-recursive organizer by default. Use --recursive to walk subfolders.
-- By default it moves files. Use --copy to copy instead.
-- Hidden files and directories are skipped.
 """
 
 from pathlib import Path
@@ -178,7 +171,7 @@ def organize_directory(target_dir: Path, recursive=False, copy=False, dry_run=Fa
         logging.info("  %s: %d", cat, count)
 
     if not stats:
-        logging.info("No files matched any category (directory may be empty).")
+        logging.info("No files matched any category ")
 
 # ---------------------------
 # CLI
